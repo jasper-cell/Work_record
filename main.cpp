@@ -162,7 +162,7 @@ void  process_contours(vector<Point> contour, cv::Mat image, int i, double pixel
 	//waitKey(0);
 }
 
-void  process_contours_cancer(vector<Point> contour, cv::Mat image, int i, double pixelDistance, cv::Mat threshold, Scalar whole_mean_color,vector< vector<Point>> whole_contour, String selected_model) {
+void  process_contours_cancer(vector<Point> contour, cv::Mat image, int i, double pixelDistance, cv::Mat threshold, vector< vector<Point>> whole_contour, String selected_model) {
 	// 最小外接矩阵 
 	vector<vector<Point>> contours;
 	contours.push_back(contour);
@@ -435,107 +435,129 @@ int main()
 	startTime = clock(); // 计时开始
 	cout << torch::cuda::is_available() << endl;
 
-	//读取图片
-	auto image = cv::imread("B20210612.jpg");
+	string src_path = "./";
+	vector<cv::String> fileNames;
+	string pattern1 = "*.jpg";
+	string pattern2 = "*.bmp";
+	string pattern3 = "*.png";
+	glob(src_path + pattern1, fileNames, false);
 
-	auto orig = image.clone();
+	for (auto file : fileNames) {
+		cout << "file: " << file << endl;
+		//读取图片
+		auto image = cv::imread(file);
 
-	// 将图片大小转换为指定大小
-	cv::resize(image, image, cv::Size(1024, 768));
+		auto orig = image.clone();
 
-	// 对图像进行预处理后方便后续直接输入模型
-	auto result = preprocess(image, 0.5, "unet.pt"); // 大体形成的mask
-	auto result_zc = preprocess(image, 0.5, "unet_zc.pt");  // 直尺的mask
-	auto result_cancer = preprocess(image, 0.5, "unet_cancer.pt"); // 癌灶区的mask
+		// 将图片大小转换为指定大小
+		cv::resize(image, image, cv::Size(1024, 768));
 
-	// 对直尺的结果进行二值化
-	threshold(result_zc, result_zc, 100, 255, THRESH_BINARY);
-	Mat dst, cdst, cdstP, dis;
+		// 对图像进行预处理后方便后续直接输入模型
+		auto result = preprocess(image, 0.5, "unet.pt"); // 大体形成的mask
+		auto result_zc = preprocess(image, 0.5, "unet_zc.pt");  // 直尺的mask
+		auto result_cancer = preprocess(image, 0.5, "unet_cancer.pt"); // 癌灶区的mask
 
-	// 对直尺进行边缘检测
-	Canny(result_zc, dst, 50, 200, 3);
-	//cvtColor(dst, cdstP, COLOR_GRAY2BGR);
-	cvtColor(dst, dis, COLOR_GRAY2BGR);
+		// 对直尺的结果进行二值化
+		threshold(result_zc, result_zc, 100, 255, THRESH_BINARY);
+		Mat dst, cdst, cdstP, dis;
 
-	// 基于统计的霍夫变换
-	vector<Vec4i> linesP; // will hold the results of the detection
-	HoughLinesP(dst, linesP, 1, CV_PI / 180, 50, 50, 10); // runs the actual detection
+		// 对直尺进行边缘检测
+		Canny(result_zc, dst, 50, 200, 3);
+		//cvtColor(dst, cdstP, COLOR_GRAY2BGR);
+		//cvtColor(dst, dis, COLOR_GRAY2BGR);
 
-	std::sort(linesP.begin(), linesP.end(), compareLineIndex);
+		// 基于统计的霍夫变换
+		vector<Vec4i> linesP; // will hold the results of the detection
+		HoughLinesP(dst, linesP, 1, CV_PI / 180, 50, 50, 10); // runs the actual detection
 
-	auto distance = pointToLinesDistance(linesP[1], linesP[linesP.size() - 1]);
-	line(dis, Point(linesP[1][0], linesP[1][1]), Point(linesP[1][2], linesP[1][3]), Scalar(0, 255, 0), 3, LINE_AA);
-	line(dis, Point(linesP[linesP.size() - 1][0], linesP[linesP.size() - 1][1]), Point(linesP[linesP.size() - 1][2], linesP[linesP.size() - 1][3]), Scalar(0, 255, 0), 3, LINE_AA);
-	//imshow("dis", dis);
-	//waitKey(0);
+		std::sort(linesP.begin(), linesP.end(), compareLineIndex);
 
-	// 得出对应的比例尺, 比例尺是十分关键的
-	double pixeldistance = 3 / distance;
+		cout << "++++++++++++HoughLinesP: +++++++++++++++" << linesP << endl;
 
-	/*
-	计算出比例尺之后对大体轮廓信息进行处理
-	*/
-
-	// 二值化处理
-	threshold(result, result, 120, 255, THRESH_BINARY);
-	auto threshold = result;
-
-	Mat edged;
-	// 对边缘进行高斯模糊
-	//GaussianBlur(result, result, Size(5, 5), 0);
-
-	// 进行边缘检测
-	Canny(result, edged, 50, 150);
-
-	// 寻找对应的轮廓
-	vector<vector<Point>> contours;
-	vector<vector<Point>> whole_contours;
-
-	findContours(edged, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point(0, 0));  // 将检测到的边缘信息保存到contours中
-	whole_contours.assign(contours.begin(), contours.end());
-
-	for (size_t i = 0; i < contours.size(); i++) {
-		if (arcLength(contours[i], true) < 180) {
-			continue;
+		double pixeldistance;
+		double distance;
+		// 如果霍夫变化检测不出两条直线的话，则自动指定对应的pixeldistance
+		if (linesP.size() < 2) {
+			pixeldistance = 0.0241051;
 		}
-		process_contours(contours[i], image, i, pixeldistance, threshold);
+		else {
+			distance = pointToLinesDistance(linesP[1], linesP[linesP.size() - 1]);
+			//imshow("dis", dis);
+			//waitKey(0);
+
+			// 得出对应的比例尺, 比例尺是十分关键的
+			pixeldistance = 3 / distance;
+		}
+		//line(dis, Point(linesP[1][0], linesP[1][1]), Point(linesP[1][2], linesP[1][3]), Scalar(0, 255, 0), 3, LINE_AA);
+		//line(dis, Point(linesP[linesP.size() - 1][0], linesP[linesP.size() - 1][1]), Point(linesP[linesP.size() - 1][2], linesP[linesP.size() - 1][3]), Scalar(0, 255, 0), 3, LINE_AA);
+
+		cout << "pixeldistance: " << pixeldistance << endl;
+
+		/*
+		计算出比例尺之后对大体轮廓信息进行处理
+		*/
+
+		// 二值化处理
+		threshold(result, result, 120, 255, THRESH_BINARY);
+		auto threshold = result;
+
+		Mat edged;
+		// 对边缘进行高斯模糊
+		//GaussianBlur(result, result, Size(5, 5), 0);
+
+		// 进行边缘检测
+		Canny(result, edged, 50, 150);
+
+		// 寻找对应的轮廓
+		vector<vector<Point>> contours;
+		vector<vector<Point>> whole_contours;
+
+		findContours(edged, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point(0, 0));  // 将检测到的边缘信息保存到contours中
+		whole_contours.assign(contours.begin(), contours.end());
+
+		for (size_t i = 0; i < contours.size(); i++) {
+			if (arcLength(contours[i], true) < 180) {
+				continue;
+			}
+			process_contours(contours[i], image, i, pixeldistance, threshold);
+		}
+
+		// 计算整体轮廓对应的颜色均值
+		////auto whole_mean_color = cv::mean(orig, threshold);  // whole为大体轮廓对应的颜色均值
+		//cout << whole_mean_color[0] << endl;
+
+		/*
+		对癌灶区的mask进行处理
+		*/
+		// 对癌灶区的mask进行二值化处理
+		cv::threshold(result_cancer, result_cancer, 120, 255, THRESH_BINARY);
+		auto threshold_cancer = result_cancer;
+
+		// 使用canny边缘检测对当前的二值化癌灶区轮廓进行处理
+		cv::Mat edged_cancer;
+		cv::Canny(result_cancer, edged_cancer, 50, 150);
+
+		// 将癌灶区的轮廓信息存储在contours_cancer中
+		std::vector<vector<Point>> contours_cancer;
+		cv::findContours(edged_cancer, contours_cancer, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point(0, 0));
+
+		for (int i = 0; i < contours_cancer.size(); i++) {
+			if (abs(arcLength(contours_cancer[i], true)) < 70) {
+				continue;
+			}
+			process_contours_cancer(contours_cancer[i], image, i, pixeldistance, threshold_cancer, whole_contours, "closer");
+		}
+
+		imshow("image", image);
+		//imshow("orig", orig);
+		waitKey(0);
+
+		cout << "function success |||" << endl;
+
+		endTime = clock();
+		cout << "run time: " << (double)(endTime - startTime) / CLOCKS_PER_SEC << "s" << endl;
+		//system("pause");
 	}
 
-	// 计算整体轮廓对应的颜色均值
-	auto whole_mean_color = cv::mean(orig, threshold);  // whole为大体轮廓对应的颜色均值
-	cout << whole_mean_color[0] << endl;
-	
-
-	/*
-	对癌灶区的mask进行处理
-	*/
-	// 对癌灶区的mask进行二值化处理
-	cv::threshold(result_cancer, result_cancer, 120, 255, THRESH_BINARY);
-	auto threshold_cancer = result_cancer;
-
-	// 使用canny边缘检测对当前的二值化癌灶区轮廓进行处理
-	cv::Mat edged_cancer;
-	cv::Canny(result_cancer, edged_cancer, 50, 150);
-
-	// 将癌灶区的轮廓信息存储在contours_cancer中
-	std::vector<vector<Point>> contours_cancer;
-	cv::findContours(edged_cancer, contours_cancer, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE, Point(0, 0));
-	
-	for (int i = 0; i < contours_cancer.size(); i++) {
-		if (arcLength(contours_cancer[i], true) < 100) {
-			continue;
-		}
-		process_contours_cancer(contours_cancer[i], image, i, pixeldistance, threshold_cancer, whole_mean_color, whole_contours, "closer");
-	}
-
-	imshow("image", image);
-	//imshow("orig", orig);
-	waitKey(0);
-
-	cout << "function success |||" << endl;
-
-	endTime = clock();
-	cout << "run time: " << (double)(endTime - startTime) / CLOCKS_PER_SEC << "s" << endl;
-	//system("pause");
 	return 0;
 }
